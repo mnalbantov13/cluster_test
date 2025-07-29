@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Cluster Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map { height: 950px; width: 100%; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script type="module">
+    import DBSCAN from 'https://cdn.skypack.dev/density-clustering';
+    const dbscan = new DBSCAN.DBSCAN();;
+
+    const targetClusterId = 2836529;
+
+    const csvFileName = 'export_road_signs_records_202507211210.csv';
+
+    const map = L.map('map').setView([41.10264217370007, 1.1165145321662422], 7);
+
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles © Esri | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
+    }).addTo(map);
+
+
+    fetch(csvFileName)
+        .then(res => {
+            if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
+            return res.text();
+        })
+        .then(text => {
+            const rows = text.trim().split('\n').map(row => row.split(','));
+
+            const headers = rows[0].map(h => h.trim().replaceAll('"', ''));
+            const Idx = headers.indexOf('id');
+            const clusterIdx = headers.indexOf('cluster_id_2');
+            const wayLatIdx = headers.indexOf('way_lat');
+            const wayLonIdx = headers.indexOf('way_lon');
+            const labelIdx = headers.indexOf('recognized_as');
+            const imgIdx = headers.indexOf('image_path');
+            const headIdx = headers.indexOf('heading')
+            const wayDirIdx = headers.indexOf('way_dir')
+            //----Target Cluster Logic----
+            // const points = [];
+            // const pointCoord = [];
+
+            // for (let i = 1; i <rows.length; i++) {
+                
+            //     const row = rows[i];
+            //     const clusterId = row[clusterIdx];
+            //     if (parseInt(clusterId) !== targetClusterId) continue;
+                
+            //     const wayLat = parseFloat(row[wayLatIdx].replaceAll('"', '').trim());
+            //     const wayLon = parseFloat(row[wayLonIdx].replaceAll('"', '').trim());
+            //     const label = row[labelIdx];
+            //     const img = row[imgIdx];
+            //     const heading = row[headIdx]
+            //     const wayDir = row[wayDirIdx]
+            //     const id = row[Idx];
+
+            //     pointCoord.push([wayLat,wayLon])
+            //     points.push({
+            //         id: id,
+            //         lat: wayLat,
+            //         lon: wayLon,
+            //         heading: heading,
+            //         wayDir: wayDir,
+            //         img: img,
+            //         label: label
+            // });
+            // }
+
+        //---Group by clusterId---
+        const clustersById = {}; // clusterId -> array of point objects
+
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const clusterId = parseInt(row[clusterIdx]);
+
+            const wayLat = parseFloat(row[wayLatIdx].replaceAll('"', '').trim());
+            const wayLon = parseFloat(row[wayLonIdx].replaceAll('"', '').trim());
+            const label = row[labelIdx];
+            const img = row[imgIdx];
+            const heading = row[headIdx];
+            const wayDir = row[wayDirIdx];
+            const id = row[Idx];
+
+            const point = {
+                id: id,
+                lat: wayLat,
+                lon: wayLon,
+                heading: heading,
+                wayDir: wayDir,
+                img: img,
+                label: label
+            };
+
+            if (!clustersById[clusterId]) {
+                clustersById[clusterId] = [];
+            }
+
+            clustersById[clusterId].push(point);
+        
+            }
+
+            //Median
+            function getMedianPoint(points) {
+                const lats = points.map(p => p.lat).sort((a, b) => a - b);
+                const lons = points.map(p => p.lon).sort((a, b) => a - b);
+                const mid = Math.floor(points.length / 2);
+                return {
+                    lat: lats[mid], 
+                    lon: lons[mid]
+                }
+            }
+
+            //Centroid
+            function getCentroid(points){
+                if (points.length === 0) return null;
+                let latSum = 0;
+                let lonSum = 0;
+
+                points.forEach(p=>{
+                    latSum+=p.lat;
+                    lonSum+=p.lon;
+                })
+
+                const centroidLat = latSum / points.length;
+                const centroidLon = lonSum / points.length;
+
+                return {
+                    lat: centroidLat,
+                    lon: centroidLon
+                }
+            }
+
+            //Last seen 
+            function lastSeen(points, headingDegrees) {
+                if (points.length === 0) return null;
+
+                const headingRad = headingDegrees * Math.PI / 180;
+                const dirX = Math.sin(headingRad);
+                const dirY = Math.cos(headingRad);
+
+                const base = getCentroid(points);
+                let lastSeen = points[0];
+                let minProjection = -Infinity;
+
+                points.forEach(p => {
+                    const dLat = (p.lat - base.lat) * 111320; // meters per degree latitude
+                    const dLon = (p.lon - base.lon) * (40075000 / 360) * Math.cos(base.lat * Math.PI / 180);
+
+                    const projection = dLat * dirY + dLon * dirX;
+
+                    if (projection > minProjection) {
+                        minProjection = projection;
+                        lastSeen = p;
+                    }
+                });
+
+                return lastSeen;
+            }
+
+            //Subclusters
+            // const clusters = dbscan.run(points, 0.00015, 3); // 0.001 ~100m
+            // const colors = ['red', 'blue', 'green', 'orange', 'purple'];
+
+            //Plot Points 
+            // clusters.forEach((cluster, idx) => {
+            //     const color = colors[idx % colors.length];
+            //     cluster.forEach(i => {
+            //         const point = points[i];
+            //         L.circleMarker([point.lat, point.lon], {
+            //             radius: 6,
+            //             color: color,
+            //             fillOpacity: 0.25,
+            //             weight: 0.2
+            //         }).addTo(map)
+            //         .bindPopup(`${point.heading}, <br><img src="${point.img}" alt="Image" style="height:150px; width:auto; margin-top:5px;"><br>${point.lat}<br>${point.lon}`);
+            //     });
+            // });
+            // //Plot Median
+            // const coordMed = getMedianPoint(points)
+            // L.circleMarker(getMedianPoint(points),{
+            //     radius: 7,
+            //     color: '#FFFF00',
+            //     fillOpacity: 1,
+            // }).addTo(map).bindPopup(`Median <br>${coordMed.lat}<br>${coordMed.lon}`)
+
+            // //Plot Centroid
+            // const centroidCoords = getCentroid(points);
+            // L.circleMarker(centroidCoords,{
+            //     radius: 7,
+            //     color: '#008000',
+            //     fillOpacity: 1,
+            // }).addTo(map).bindPopup(`Centroid <br>${centroidCoords.lat.toFixed(6)}<br>${centroidCoords.lon.toFixed(6)}`)
+
+            // //Plot Last Seen 
+            // const degrees = points[0].wayDir;
+            // const lastPoint = lastSeen(points, degrees);
+            // L.circleMarker(lastPoint,{
+            //     radius: 7,
+            //     color: '#0000FF',
+            //     fillOpacity: 1,  
+            // }).addTo(map).bindPopup(`Last Seen <br>${lastPoint['lat'].toFixed(6)}<br>${lastPoint['lon'].toFixed(6)} <br><img src="${lastPoint.img}" alt="Image" style="height:150px; width:auto; margin-top:5px;">`)
+
+
+
+        
+    // ---Plot noise points--- 
+//     const noise = dbscan.noise;
+//     noise.forEach(i => {
+//         const [lat, lon] = points[i];
+//         L.circleMarker([lat, lon], {
+//             radius: 6,
+//             color: 'gray',
+//             fillOpacity: 0.5
+//         }).addTo(map)
+//         .bindPopup(`Noise`);
+//     });
+        
+        //Computing Error
+        function haversineDistance(coord1, coord2) {
+            const R = 6371000; // Earth radius in meters
+            const toRad = deg => deg * Math.PI / 180;
+
+            const dLat = toRad(coord2.lat - coord1.lat);
+            const dLon = toRad(coord2.lon - coord1.lon);
+
+            const lat1 = toRad(coord1.lat);
+            const lat2 = toRad(coord2.lat);
+
+            const a = Math.sin(dLat / 2) ** 2 +
+                    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            return R * c;
+        }
+
+        // Ground truth map for error calculation
+        const groundTruthMap = {
+            2836529: { lat: 44.8467599309146,  lon: -0.5025618448490957 }
+            // Add more ground truth coordinates as needed
+        };
+
+        Object.entries(clustersById).forEach(([clusterId, points]) => {
+            clusterId = parseInt(clusterId);
+            const groundTruth = groundTruthMap[clusterId];
+            if (!groundTruth) return; // Skip clusters with no known truth
+
+            // Compute estimates
+            const median = getMedianPoint(points);
+            const centroid = getCentroid(points);
+            const last = lastSeen(points, points[0].wayDir);
+
+            const dMed = haversineDistance(groundTruth, median);
+            const dCent = haversineDistance(groundTruth, centroid);
+            const dLast = haversineDistance(groundTruth, last);
+
+            const d = haversineDistance(last, median);
+            const w = Math.min(1, 10 / d); // Blend weight
+            const weighted = {
+                lat: w * last.lat + (1 - w) * median.lat,
+                lon: w * last.lon + (1 - w) * median.lon
+            };
+            const dWeighted = haversineDistance(groundTruth, weighted);
+
+            console.log(`Cluster ${clusterId} Errors:`);
+            console.log(`- Median: ${dMed.toFixed(1)}m`);
+            console.log(`- Centroid: ${dCent.toFixed(1)}m`);
+            console.log(`- Last Seen: ${dLast.toFixed(1)}m`);
+            console.log(`- Weighted: ${dWeighted.toFixed(1)}m`);
+        });
+
+
+        // const groundTruth = { lat:40.88603139745637,  lon:  0.7983606343051153};
+        // const cent = {lat: centroidCoords.lat, lon: centroidCoords.lon }
+        // const med = {lat: coordMed.lat, lon: coordMed.lon }
+        // const last = {lat: lastPoint.lat, lon : lastPoint.lon}
+        // console.log("Median: "+haversineDistance(groundTruth, med).toFixed(0))
+        // console.log("Centroid: "+haversineDistance(groundTruth, cent).toFixed(0))
+        // console.log("Last: "+haversineDistance(groundTruth, last).toFixed(0))
+        
+
+         // Compute distance between last seen and median
+            // const d = haversineDistance(last, med);
+
+            // // Dynamic blending threshold
+            // const threshold = 10; // meters
+
+            // let w = Math.min(1, threshold / d); // weight for "last seen"
+
+            // let finalLat = w * last.lat + (1 - w) * med.lat;
+            // let finalLon = w * last.lon + (1 - w) * med.lon;
+            // L.marker([finalLat, finalLon], {
+            // }).addTo(map).bindPopup(`Weighted <br>${finalLat.toFixed(6)}<br>${finalLon.toFixed(6)}`)
+            // const weighted = {lat: finalLat, lon: finalLon}
+            // console.log('Weighted: '+ haversineDistance(groundTruth, weighted).toFixed(0))
+            
+
+            // // Find closest cluster point to (finalLat, finalLon)
+            // let minDist = Infinity;
+            // let closestPoint = null;
+            // points.forEach(p => {
+            //     const dist = haversineDistance({lat: finalLat, lon: finalLon}, {lat: p.lat, lon: p.lon});
+            //     if (dist < minDist) {
+            //         minDist = dist;
+            //         closestPoint = p;
+            //     }
+            // });
+            // console.log('Closest point to weighted:: ' + haversineDistance(groundTruth, closestPoint).toFixed(0));
+            // console.log('Closest cluster point:', closestPoint);
+
+            // // Mark it on the map
+            // L.circleMarker([closestPoint.lat, closestPoint.lon], {
+            //     radius: 8,
+            //     color: '#FF00FF',
+            //     fillOpacity: 1,
+            // }).addTo(map).bindPopup(`Closest to Weighted<br>${closestPoint.lat.toFixed(6)}<br>${closestPoint.lon.toFixed(6)}<br>ID: ${closestPoint.id}`);
+ });
+
+</script>
+
+</body>
+</html>
