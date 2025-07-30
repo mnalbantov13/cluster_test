@@ -18,7 +18,7 @@
     import DBSCAN from 'https://cdn.skypack.dev/density-clustering';
     const dbscan = new DBSCAN.DBSCAN();;
 
-    const targetClusterId = 2836529;
+    const targetClusterId = 11906061 ;
 
     const csvFileName = 'export_bojurishte_test_clusters_road_signs_records_202507161125.csv';
     const groundCoords = 'export_task_3_signs_google_streetview_check_202507301237.csv';
@@ -58,8 +58,8 @@
                 }
             });
         });
-        console.log(groundTruthMap)
 
+    const clustersById = {};
     fetch(csvFileName)
         .then(res => {
             if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
@@ -108,7 +108,7 @@
             // }
 
         //---Group by clusterId---
-        const clustersById = {}; // clusterId -> array of point objects
+         // clusterId -> array of point objects
 
         for (let i = 1; i < rows.length; i++) {
             const row = rows[i];
@@ -202,59 +202,6 @@
             // const clusters = dbscan.run(points, 0.00015, 3); // 0.001 ~100m
             // const colors = ['red', 'blue', 'green', 'orange', 'purple'];
 
-            //Plot Points 
-            // clusters.forEach((cluster, idx) => {
-            //     const color = colors[idx % colors.length];
-            //     cluster.forEach(i => {
-            //         const point = points[i];
-            //         L.circleMarker([point.lat, point.lon], {
-            //             radius: 6,
-            //             color: color,
-            //             fillOpacity: 0.25,
-            //             weight: 0.2
-            //         }).addTo(map)
-            //         .bindPopup(`${point.heading}, <br><img src="${point.img}" alt="Image" style="height:150px; width:auto; margin-top:5px;"><br>${point.lat}<br>${point.lon}`);
-            //     });
-            // });
-            // //Plot Median
-            // const coordMed = getMedianPoint(points)
-            // L.circleMarker(getMedianPoint(points),{
-            //     radius: 7,
-            //     color: '#FFFF00',
-            //     fillOpacity: 1,
-            // }).addTo(map).bindPopup(`Median <br>${coordMed.lat}<br>${coordMed.lon}`)
-
-            // //Plot Centroid
-            // const centroidCoords = getCentroid(points);
-            // L.circleMarker(centroidCoords,{
-            //     radius: 7,
-            //     color: '#008000',
-            //     fillOpacity: 1,
-            // }).addTo(map).bindPopup(`Centroid <br>${centroidCoords.lat.toFixed(6)}<br>${centroidCoords.lon.toFixed(6)}`)
-
-            // //Plot Last Seen 
-            // const degrees = points[0].wayDir;
-            // const lastPoint = lastSeen(points, degrees);
-            // L.circleMarker(lastPoint,{
-            //     radius: 7,
-            //     color: '#0000FF',
-            //     fillOpacity: 1,  
-            // }).addTo(map).bindPopup(`Last Seen <br>${lastPoint['lat'].toFixed(6)}<br>${lastPoint['lon'].toFixed(6)} <br><img src="${lastPoint.img}" alt="Image" style="height:150px; width:auto; margin-top:5px;">`)
-
-
-
-        
-    // ---Plot noise points--- 
-//     const noise = dbscan.noise;
-//     noise.forEach(i => {
-//         const [lat, lon] = points[i];
-//         L.circleMarker([lat, lon], {
-//             radius: 6,
-//             color: 'gray',
-//             fillOpacity: 0.5
-//         }).addTo(map)
-//         .bindPopup(`Noise`);
-//     });
         
         //Computing Error
         function haversineDistance(coord1, coord2) {
@@ -276,7 +223,7 @@
 
         // Ground truth map for error calculation
 
-        let sumMed = 0, sumCent = 0, sumLast = 0, sumWeighted = 0, count = 0;
+let sumMed = 0, sumCent = 0, sumLast = 0, sumWeighted = 0, count = 0;
 let lastSeenOver15 = 0, weightedOver15 = 0;
 
 Object.entries(clustersById).forEach(([clusterId, points]) => {
@@ -341,54 +288,74 @@ if (count > 0) {
     console.log(`Weighted: ${(sumWeighted / count).toFixed(1)}m`);
     console.log(`Number of Last Seen errors > 15m: ${lastSeenOver15}`);
     console.log(`Number of Weighted errors > 15m: ${weightedOver15}`);
+} 
+ 
+ // Visualize for a specific cluster
+const targetPoints = clustersById[targetClusterId];
+if (targetPoints && targetPoints.length > 0) {
+    const median = getMedianPoint(targetPoints);
+    const centroid = getCentroid(targetPoints);
+    const last = lastSeen(targetPoints, targetPoints[0].wayDir);
+
+    // Weighted calculation (same as in your error loop)
+    const d = haversineDistance(last, median);
+    const w = Math.min(1, 20 / (d || 1));
+    const blended = {
+        lat: w * last.lat + (1 - w) * median.lat,
+        lon: w * last.lon + (1 - w) * median.lon
+    };
+    // Find closest cluster point to blended
+    let minDist = Infinity;
+    let weighted = targetPoints[0];
+    targetPoints.forEach(p => {
+        const dist = haversineDistance(blended, { lat: p.lat, lon: p.lon });
+        if (dist < minDist) {
+            minDist = dist;
+            weighted = p;
+        }
+    });
+
+    // Plot all cluster points
+    targetPoints.forEach(p => {
+        L.circleMarker([p.lat, p.lon], {
+            radius: 6,
+            color: 'red',
+            fillOpacity: 0.2,
+            weight: 0.5
+        }).addTo(map).bindPopup(`Cluster Point<br>ID: ${p.id}<br>${p.lat}, ${p.lon}`);
+    });
+
+    // Plot median
+    L.circleMarker([median.lat, median.lon], {
+        radius: 8,
+        color: '#FFFF00',
+        fillOpacity: 1
+    }).addTo(map).bindPopup(`Median<br>${median.lat.toFixed(6)}, ${median.lon.toFixed(6)}`);
+
+    // Plot centroid
+    L.circleMarker([centroid.lat, centroid.lon], {
+        radius: 6,
+        color: '#008000',
+        fillOpacity: 1
+    }).addTo(map).bindPopup(`Centroid<br>${centroid.lat.toFixed(6)}, ${centroid.lon.toFixed(6)}`);
+
+    // Plot last seen
+    L.circleMarker([last.lat, last.lon], {
+        radius: 8,
+        color: '#0000FF',
+        fillOpacity: 1
+    }).addTo(map).bindPopup(`Last Seen<br>${last.lat.toFixed(6)}, ${last.lon.toFixed(6)}`);
+
+    // Plot weighted
+    L.circleMarker([weighted.lat, weighted.lon], {
+        radius: 4,
+        color: '#FF00FF',
+        fillOpacity: 0.7
+    }).addTo(map).bindPopup(`Weighted<br>${weighted.lat.toFixed(6)}, ${weighted.lon.toFixed(6)}`);
 }
+});
 
 
-        // const groundTruth = { lat:40.88603139745637,  lon:  0.7983606343051153};
-        // const cent = {lat: centroidCoords.lat, lon: centroidCoords.lon }
-        // const med = {lat: coordMed.lat, lon: coordMed.lon }
-        // const last = {lat: lastPoint.lat, lon : lastPoint.lon}
-        // console.log("Median: "+haversineDistance(groundTruth, med).toFixed(0))
-        // console.log("Centroid: "+haversineDistance(groundTruth, cent).toFixed(0))
-        // console.log("Last: "+haversineDistance(groundTruth, last).toFixed(0))
-        
-
-         // Compute distance between last seen and median
-            // const d = haversineDistance(last, med);
-
-            // // Dynamic blending threshold
-            // const threshold = 10; // meters
-
-            // let w = Math.min(1, threshold / d); // weight for "last seen"
-
-            // let finalLat = w * last.lat + (1 - w) * med.lat;
-            // let finalLon = w * last.lon + (1 - w) * med.lon;
-            // L.marker([finalLat, finalLon], {
-            // }).addTo(map).bindPopup(`Weighted <br>${finalLat.toFixed(6)}<br>${finalLon.toFixed(6)}`)
-            // const weighted = {lat: finalLat, lon: finalLon}
-            // console.log('Weighted: '+ haversineDistance(groundTruth, weighted).toFixed(0))
-            
-
-            // // Find closest cluster point to (finalLat, finalLon)
-            // let minDist = Infinity;
-            // let closestPoint = null;
-            // points.forEach(p => {
-            //     const dist = haversineDistance({lat: finalLat, lon: finalLon}, {lat: p.lat, lon: p.lon});
-            //     if (dist < minDist) {
-            //         minDist = dist;
-            //         closestPoint = p;
-            //     }
-            // });
-            // console.log('Closest point to weighted:: ' + haversineDistance(groundTruth, closestPoint).toFixed(0));
-            // console.log('Closest cluster point:', closestPoint);
-
-            // // Mark it on the map
-            // L.circleMarker([closestPoint.lat, closestPoint.lon], {
-            //     radius: 8,
-            //     color: '#FF00FF',
-            //     fillOpacity: 1,
-            // }).addTo(map).bindPopup(`Closest to Weighted<br>${closestPoint.lat.toFixed(6)}<br>${closestPoint.lon.toFixed(6)}<br>ID: ${closestPoint.id}`);
- });
 
 </script>
 
