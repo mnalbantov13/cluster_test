@@ -20,14 +20,45 @@
 
     const targetClusterId = 2836529;
 
-    const csvFileName = 'export_road_signs_records_202507211210.csv';
+    const csvFileName = 'export_bojurishte_test_clusters_road_signs_records_202507161125.csv';
+    const groundCoords = 'export_task_3_signs_google_streetview_check_202507301237.csv';
 
     const map = L.map('map').setView([41.10264217370007, 1.1165145321662422], 7);
 
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles © Esri | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
     }).addTo(map);
+    const groundTruthMap = {};
+    // Load ground truth coordinates
+    fetch(groundCoords)
+        .then(res => {
+            if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
+            return res.text();
+        })
+        .then(text => {
+            const rows = text.trim().split('\n').map(row => row.split(','));
+            const headers = rows[0].map(h => h.trim().replaceAll('"', ''));
+            const latIdx = headers.indexOf('lat');
+            const lonIdx = headers.indexOf('lon');
+            const idIdx = headers.indexOf('road_sign_record_id');
 
+            rows.slice(1).forEach(row => {
+                // Clean up values
+                const latStr = row[latIdx]?.replaceAll('"', '').trim();
+                const lonStr = row[lonIdx]?.replaceAll('"', '').trim();
+                const idStr = row[idIdx]?.replaceAll('"', '').trim();
+
+                const lat = parseFloat(latStr);
+                const lon = parseFloat(lonStr);
+                const id = Number(idStr);
+
+                // Only add valid entries
+                if (!isNaN(lat) && !isNaN(lon) && !isNaN(id)) {
+                    groundTruthMap[id] = { lat, lon };
+                }
+            });
+        });
+        console.log(groundTruthMap)
 
     fetch(csvFileName)
         .then(res => {
@@ -244,39 +275,73 @@
         }
 
         // Ground truth map for error calculation
-        const groundTruthMap = {
-            2836529: { lat: 44.8467599309146,  lon: -0.5025618448490957 }
-            // Add more ground truth coordinates as needed
-        };
 
-        Object.entries(clustersById).forEach(([clusterId, points]) => {
-            clusterId = parseInt(clusterId);
-            const groundTruth = groundTruthMap[clusterId];
-            if (!groundTruth) return; // Skip clusters with no known truth
+        let sumMed = 0, sumCent = 0, sumLast = 0, sumWeighted = 0, count = 0;
+let lastSeenOver15 = 0, weightedOver15 = 0;
 
-            // Compute estimates
-            const median = getMedianPoint(points);
-            const centroid = getCentroid(points);
-            const last = lastSeen(points, points[0].wayDir);
+Object.entries(clustersById).forEach(([clusterId, points]) => {
+    clusterId = parseInt(clusterId);
+    const groundTruth = groundTruthMap[clusterId];
+    if (!groundTruth) return; // Skip clusters with no known truth
 
-            const dMed = haversineDistance(groundTruth, median);
-            const dCent = haversineDistance(groundTruth, centroid);
-            const dLast = haversineDistance(groundTruth, last);
+    // Compute estimates
+    const median = getMedianPoint(points);
+    const centroid = getCentroid(points);
+    const last = lastSeen(points, points[0].wayDir);
 
-            const d = haversineDistance(last, median);
-            const w = Math.min(1, 10 / d); // Blend weight
-            const weighted = {
-                lat: w * last.lat + (1 - w) * median.lat,
-                lon: w * last.lon + (1 - w) * median.lon
-            };
-            const dWeighted = haversineDistance(groundTruth, weighted);
+    const dMed = haversineDistance(groundTruth, median);
+    const dCent = haversineDistance(groundTruth, centroid);
+    const dLast = haversineDistance(groundTruth, last);
 
-            console.log(`Cluster ${clusterId} Errors:`);
-            console.log(`- Median: ${dMed.toFixed(1)}m`);
-            console.log(`- Centroid: ${dCent.toFixed(1)}m`);
-            console.log(`- Last Seen: ${dLast.toFixed(1)}m`);
-            console.log(`- Weighted: ${dWeighted.toFixed(1)}m`);
-        });
+    const d = haversineDistance(last, median);
+    const w = Math.min(1, 20 / d); // Blend weight
+
+    // Compute blended coordinates
+    const blended = {
+        lat: w * last.lat + (1 - w) * median.lat,
+        lon: w * last.lon + (1 - w) * median.lon
+    };
+
+    // Find the cluster point closest to the blended coordinates
+    let minDist = Infinity;
+    let weighted = points[0];
+    points.forEach(p => {
+        const dist = haversineDistance(blended, { lat: p.lat, lon: p.lon });
+        if (dist < minDist) {
+            minDist = dist;
+            weighted = p;
+        }
+    });
+    const dWeighted = haversineDistance(groundTruth, weighted);
+
+    sumMed += dMed;
+    sumCent += dCent;
+    sumLast += dLast;
+    sumWeighted += dWeighted;
+    count++;
+
+    // Only count clusters with more than 1 point for over-15m stats
+    if (points.length > 0) {
+        if (dLast > 15) lastSeenOver15++;
+        if (dWeighted > 15) weightedOver15++;
+    }
+
+    console.log(`Cluster ${clusterId} Errors:`);
+    console.log(`- Median: ${dMed.toFixed(1)}m`);
+    console.log(`- Centroid: ${dCent.toFixed(1)}m`);
+    console.log(`- Last Seen: ${dLast.toFixed(1)}m`);
+    console.log(`- Weighted: ${dWeighted.toFixed(1)}m`);
+});
+
+if (count > 0) {
+    console.log('--- Average Errors ---');
+    console.log(`Median: ${(sumMed / count).toFixed(1)}m`);
+    console.log(`Centroid: ${(sumCent / count).toFixed(1)}m`);
+    console.log(`Last Seen: ${(sumLast / count).toFixed(1)}m`);
+    console.log(`Weighted: ${(sumWeighted / count).toFixed(1)}m`);
+    console.log(`Number of Last Seen errors > 15m: ${lastSeenOver15}`);
+    console.log(`Number of Weighted errors > 15m: ${weightedOver15}`);
+}
 
 
         // const groundTruth = { lat:40.88603139745637,  lon:  0.7983606343051153};
