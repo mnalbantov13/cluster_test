@@ -18,12 +18,14 @@
     import DBSCAN from 'https://cdn.skypack.dev/density-clustering';
     const dbscan = new DBSCAN.DBSCAN();;
 
-    const targetClusterId = 11906061 ;
-
+    const targetClusterId = 10778165; 
+    //9701897 - two clusters as one
+    //11030505
+    //10778165  - 3 subclusters
     const csvFileName = 'export_bojurishte_test_clusters_road_signs_records_202507161125.csv';
     const groundCoords = 'export_task_3_signs_google_streetview_check_202507301237.csv';
 
-    const map = L.map('map').setView([41.10264217370007, 1.1165145321662422], 7);
+    const map = L.map('map').setView([42.10264217370007, 23.118631], 7);
 
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles © Esri | Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community'
@@ -60,6 +62,7 @@
         });
 
     const clustersById = {};
+    let clusterCount = 0;
     fetch(csvFileName)
         .then(res => {
             if (!res.ok) throw new Error(`Failed to fetch file: ${res.status}`);
@@ -77,38 +80,6 @@
             const imgIdx = headers.indexOf('image_path');
             const headIdx = headers.indexOf('heading')
             const wayDirIdx = headers.indexOf('way_dir')
-            //----Target Cluster Logic----
-            // const points = [];
-            // const pointCoord = [];
-
-            // for (let i = 1; i <rows.length; i++) {
-                
-            //     const row = rows[i];
-            //     const clusterId = row[clusterIdx];
-            //     if (parseInt(clusterId) !== targetClusterId) continue;
-                
-            //     const wayLat = parseFloat(row[wayLatIdx].replaceAll('"', '').trim());
-            //     const wayLon = parseFloat(row[wayLonIdx].replaceAll('"', '').trim());
-            //     const label = row[labelIdx];
-            //     const img = row[imgIdx];
-            //     const heading = row[headIdx]
-            //     const wayDir = row[wayDirIdx]
-            //     const id = row[Idx];
-
-            //     pointCoord.push([wayLat,wayLon])
-            //     points.push({
-            //         id: id,
-            //         lat: wayLat,
-            //         lon: wayLon,
-            //         heading: heading,
-            //         wayDir: wayDir,
-            //         img: img,
-            //         label: label
-            // });
-            // }
-
-        //---Group by clusterId---
-         // clusterId -> array of point objects
 
         for (let i = 1; i < rows.length; i++) {
             const row = rows[i];
@@ -174,6 +145,10 @@
             //Last seen 
             function lastSeen(points, headingDegrees) {
                 if (points.length === 0) return null;
+
+                    // Try to find the point with id equal to the cluster id
+                const match = points.find(p => String(p.id) === String(p.clusterId));
+                if (match) return match;
 
                 const headingRad = headingDegrees * Math.PI / 180;
                 const dirX = Math.sin(headingRad);
@@ -268,7 +243,8 @@ Object.entries(clustersById).forEach(([clusterId, points]) => {
     count++;
 
     // Only count clusters with more than 1 point for over-15m stats
-    if (points.length > 0) {
+    if (points.length > 1) {
+        clusterCount++;
         if (dLast > 15) lastSeenOver15++;
         if (dWeighted > 15) weightedOver15++;
     }
@@ -299,7 +275,7 @@ if (targetPoints && targetPoints.length > 0) {
 
     // Weighted calculation (same as in your error loop)
     const d = haversineDistance(last, median);
-    const w = Math.min(1, 20 / (d || 1));
+    const w = Math.min(1, 20 / d);
     const blended = {
         lat: w * last.lat + (1 - w) * median.lat,
         lon: w * last.lon + (1 - w) * median.lon
@@ -315,15 +291,50 @@ if (targetPoints && targetPoints.length > 0) {
         }
     });
 
-    // Plot all cluster points
-    targetPoints.forEach(p => {
-        L.circleMarker([p.lat, p.lon], {
-            radius: 6,
-            color: 'red',
-            fillOpacity: 0.2,
-            weight: 0.5
-        }).addTo(map).bindPopup(`Cluster Point<br>ID: ${p.id}<br>${p.lat}, ${p.lon}`);
+        // Run DBSCAN on this cluster's points to find subclusters
+    const dbscanPoints = targetPoints.map(p => [p.lat, p.lon]);
+    const subclusters = dbscan.run(dbscanPoints, 0.0001, 3); 
+
+    // Assign a color for each subcluster
+    const subColors = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow', 'black'];
+    subclusters.forEach((indices, idx) => {
+        indices.forEach(i => {
+            const p = targetPoints[i];
+            L.circleMarker([p.lat, p.lon], {
+                radius: 7,
+                color: subColors[idx % subColors.length],
+                fillOpacity: 0.5,
+                weight: 2
+            }).addTo(map).bindPopup(
+                `Subcluster ${idx + 1}<br>ID: ${p.id}<br>${p.lat}, ${p.lon}<br><img src="${p.img}" alt="image" style="max-width:180px;">`
+            );
+        });
     });
+
+    // Optionally, plot noise points (not in any subcluster)
+    if (dbscan.noise && dbscan.noise.length > 0) {
+        dbscan.noise.forEach(i => {
+            const p = targetPoints[i];
+            L.circleMarker([p.lat, p.lon], {
+                radius: 7,
+                color: 'gray',
+                fillOpacity: 0.2,
+                weight: 1
+            }).addTo(map).bindPopup(
+                `Noise<br>ID: ${p.id}<br>${p.lat}, ${p.lon}<br><img src="${p.img}" alt="image" style="max-width:180px;">`
+            );
+        });
+    }
+
+    // Plot all cluster points
+    // targetPoints.forEach(p => {
+    //     L.circleMarker([p.lat, p.lon], {
+    //         radius: 6,
+    //         color: 'red',
+    //         fillOpacity: 0.2,
+    //         weight: 0.5
+    //     }).addTo(map).bindPopup(`Cluster Point<br>ID: ${p.id}<br>${p.lat}, ${p.lon}<br><img src="${p.img}" alt="image" style="max-width:180px;">`);
+    // });
 
     // Plot median
     L.circleMarker([median.lat, median.lon], {
@@ -344,7 +355,9 @@ if (targetPoints && targetPoints.length > 0) {
         radius: 8,
         color: '#0000FF',
         fillOpacity: 1
-    }).addTo(map).bindPopup(`Last Seen<br>${last.lat.toFixed(6)}, ${last.lon.toFixed(6)}`);
+    }).addTo(map).bindPopup(
+        `Last Seen<br>${last.lat.toFixed(6)}, ${last.lon.toFixed(6)}<br>ID: ${last.id}<br><img src="${last.img}" alt="image" style="max-width:180px;">`
+    );
 
     // Plot weighted
     L.circleMarker([weighted.lat, weighted.lon], {
@@ -352,7 +365,9 @@ if (targetPoints && targetPoints.length > 0) {
         color: '#FF00FF',
         fillOpacity: 0.7
     }).addTo(map).bindPopup(`Weighted<br>${weighted.lat.toFixed(6)}, ${weighted.lon.toFixed(6)}`);
+    console.log(`Total clusters with ground truth: ${clusterCount}`);
 }
+
 });
 
 
